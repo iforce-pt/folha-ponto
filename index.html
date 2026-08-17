@@ -353,12 +353,11 @@
       <input type="number" id="daily-hours" min="1" max="12" step="0.5" value="8" style="min-width:110px;">
     </div>
     <div class="row-actions">
-      <button id="btn-delete-worker" class="btn-secondary small hidden" type="button" title="Eliminar trabalhador selecionado">Eliminar trabalhador</button>
+      <button id="btn-save-all" class="btn-primary" type="button">Guardar</button>
       <button id="btn-export-csv" class="btn-secondary" type="button">Exportar CSV</button>
       <button id="btn-print" class="btn-secondary" type="button">Imprimir</button>
     </div>
   </div>
-  <div id="delete-worker-msg" class="auth-error hidden no-print" style="margin:0 0 12px;"></div>
 
   <div id="refresh-banner" class="refresh-banner hidden no-print">
     <span>Há alterações mais recentes feitas por outra pessoa.</span>
@@ -463,8 +462,7 @@
 
   var workerSelect = document.getElementById("worker-select");
   var fieldWorker = document.getElementById("field-worker");
-  var btnDeleteWorker = document.getElementById("btn-delete-worker");
-  var deleteWorkerMsg = document.getElementById("delete-worker-msg");
+  var btnSaveAll = document.getElementById("btn-save-all");
   var monthInput = document.getElementById("month-select");
   var dailyHoursInput = document.getElementById("daily-hours");
   var tbody = document.getElementById("timesheet-body");
@@ -619,7 +617,6 @@
 
       if(profile.is_admin){
         fieldWorker.classList.remove("hidden");
-        btnDeleteWorker.classList.remove("hidden");
         loadAllWorkers().then(function(){
           targetUserId = profile.id;
           workerSelect.value = targetUserId;
@@ -627,7 +624,6 @@
         });
       } else {
         fieldWorker.classList.add("hidden");
-        btnDeleteWorker.classList.add("hidden");
         targetUserId = profile.id;
         afterTargetChosen();
       }
@@ -661,58 +657,9 @@
     subscribeRealtime();
     loadMonth();
   });
-
-  // ---- Eliminar trabalhador (apenas admin) ----
-  btnDeleteWorker.addEventListener("click", function(){
-    deleteWorkerMsg.classList.add("hidden");
-    if(!targetUserId || !currentProfile) return;
-
-    if(targetUserId === currentProfile.id){
-      deleteWorkerMsg.textContent = "Não podes eliminar a tua própria conta de administrador.";
-      deleteWorkerMsg.classList.remove("hidden");
-      return;
-    }
-
-    var opt = workerSelect.options[workerSelect.selectedIndex];
-    var nome = opt ? opt.textContent : "este trabalhador";
-    var ok = window.confirm(
-      "Eliminar definitivamente \"" + nome + "\"?\n\n" +
-      "Isto apaga a conta de login e todos os registos da folha de ponto deste trabalhador. Esta ação não pode ser desfeita."
-    );
-    if(!ok) return;
-
-    btnDeleteWorker.disabled = true;
-    btnDeleteWorker.textContent = "A eliminar…";
-
-    sb.functions.invoke("delete-worker", { body: { targetUserId: targetUserId } }).then(function(res){
-      btnDeleteWorker.disabled = false;
-      btnDeleteWorker.textContent = "Eliminar trabalhador";
-      if(res.error){
-        deleteWorkerMsg.textContent = "Erro ao eliminar: " + (res.error.message || "tenta novamente.");
-        deleteWorkerMsg.classList.remove("hidden");
-        return;
-      }
-      if(res.data && res.data.error){
-        deleteWorkerMsg.textContent = "Erro ao eliminar: " + res.data.error;
-        deleteWorkerMsg.classList.remove("hidden");
-        return;
-      }
-      teardownRealtime();
-      loadAllWorkers().then(function(){
-        targetUserId = currentProfile.id;
-        workerSelect.value = targetUserId;
-        afterTargetChosen();
-      });
-    }).catch(function(err){
-      btnDeleteWorker.disabled = false;
-      btnDeleteWorker.textContent = "Eliminar trabalhador";
-      deleteWorkerMsg.textContent = "Erro ao eliminar: " + (err && err.message ? err.message : "tenta novamente.");
-      deleteWorkerMsg.classList.remove("hidden");
-      console.error(err);
-    });
-  });
   monthInput.addEventListener("change", loadMonth);
   dailyHoursInput.addEventListener("change", renderTable);
+  btnSaveAll.addEventListener("click", saveAllDays);
 
   function loadMonth(){
     if(!targetUserId) return;
@@ -750,6 +697,35 @@
       if(res.error) throw res.error;
       setSync("saved","Guardado");
     }).catch(function(err){
+      setSync("error","Erro ao guardar — verifica a ligação");
+      console.error(err);
+    });
+  }
+
+  // Guarda de uma só vez todos os dias do mês atual (além da gravação
+  // automática que já acontece a cada alteração — serve como confirmação
+  // manual, útil por exemplo antes de sair da página).
+  function saveAllDays(){
+    if(!targetUserId) return;
+    var ym = currentYM();
+    var nDays = daysInMonth(ym);
+    var rows = [];
+    for(let d=1; d<=nDays; d++){
+      let day = getDay(d);
+      rows.push({
+        user_id: targetUserId, ano_mes: ym, dia: d,
+        tipo: day.tipo, entrada: day.entrada||null, pausa_inicio: day.pausa_inicio||null,
+        pausa_fim: day.pausa_fim||null, saida: day.saida||null, obra: day.obra||null
+      });
+    }
+    setSync("saving","A guardar…");
+    btnSaveAll.disabled = true;
+    return sb.from("folha_ponto_entries").upsert(rows, { onConflict: "user_id,ano_mes,dia" }).then(function(res){
+      btnSaveAll.disabled = false;
+      if(res.error) throw res.error;
+      setSync("saved","Guardado");
+    }).catch(function(err){
+      btnSaveAll.disabled = false;
       setSync("error","Erro ao guardar — verifica a ligação");
       console.error(err);
     });
